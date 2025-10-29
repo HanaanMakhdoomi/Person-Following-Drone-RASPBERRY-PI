@@ -1,0 +1,188 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Pi Person Selector</title>
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background:#111;
+      color:#eee;
+      margin:0;
+      padding:10px;
+    }
+    #container {
+      position: relative;
+      width: 640px;
+      margin:auto;
+    }
+    #video {
+      display:block;
+      width: 100%;
+      border: 2px solid #333;
+    }
+    .bbox {
+      position: absolute;
+      border: 2px solid rgba(0,255,0,0.9);
+      pointer-events: auto;
+      box-sizing: border-box;
+      background: rgba(0,0,0,0.0);
+      cursor: pointer;
+    }
+    .bbox.selected {
+      border-color: rgba(255,0,0,0.95);
+      box-shadow: 0 0 6px rgba(255,0,0,0.4);
+    }
+    .label {
+      position: absolute;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-size: 12px;
+      padding: 2px 4px;
+      transform: translateY(-100%);
+      white-space: nowrap;
+    }
+    #status {
+      text-align:center;
+      margin-top:8px;
+    }
+    button {
+      margin-left:8px;
+      padding:6px 10px;
+    }
+  </style>
+</head>
+<body>
+  <h2 style="text-align:center">Pi Camera — Click a detected person to select</h2>
+  <div id="container">
+    <img id="video" src="/video_feed" alt="video feed">
+  </div>
+  <div id="status">
+    Selected: <span id="sel">None</span>
+    <button id="clearBtn">Clear selection</button>
+  </div>
+
+  <script>
+    const container = document.getElementById('container');
+    const video = document.getElementById('video');
+    const selSpan = document.getElementById('sel');
+    const clearBtn = document.getElementById('clearBtn');
+
+    let lastDetections = [];
+    let selected = null;
+    let imgWidth = 640, imgHeight = 480;
+
+    // poll detections and draw overlays
+    async function updateDetections() {
+      try {
+        const res = await fetch('/detections');
+        const data = await res.json();
+        imgWidth = data.width;
+        imgHeight = data.height;
+        lastDetections = data.people;
+        selected = data.selected;
+        drawOverlays();
+        selSpan.textContent = selected === null ? "None" : selected;
+      } catch (e) {
+        console.log("detections error", e);
+      } finally {
+        setTimeout(updateDetections, 200);
+      }
+    }
+
+    function drawOverlays() {
+      // remove old overlays
+      document.querySelectorAll('.bbox').forEach(n => n.remove());
+
+      const displayW = video.clientWidth;
+      const displayH = video.clientHeight;
+      const scaleX = displayW / imgWidth;
+      const scaleY = displayH / imgHeight;
+
+      lastDetections.forEach(p => {
+        const [sx, sy, ex, ey] = p.bbox;
+        const left = Math.round(sx * scaleX);
+        const top = Math.round(sy * scaleY);
+        const w = Math.round((ex - sx) * scaleX);
+        const h = Math.round((ey - sy) * scaleY);
+
+        const div = document.createElement('div');
+        div.className = 'bbox' + (p.id === selected ? ' selected' : '');
+        div.style.left = left + 'px';
+        div.style.top = top + 'px';
+        div.style.width = w + 'px';
+        div.style.height = h + 'px';
+        div.dataset.trackId = p.id;
+
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.innerText = `ID:${p.id} ${p.confidence.toFixed(2)}`;
+        div.appendChild(label);
+
+        // click handler selects this track id
+        div.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          try {
+            const r = await fetch('/select_target', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ track_id: p.id })
+            });
+            const j = await r.json();
+            if (j.success) {
+              selected = j.selected;
+              selSpan.textContent = selected;
+              drawOverlays();
+            }
+          } catch (err) {
+            console.error(err);
+          }
+        });
+
+        container.appendChild(div);
+      });
+    }
+
+    // click on image to select nearest person (x,y)
+    video.addEventListener('click', async (ev) => {
+      const rect = video.getBoundingClientRect();
+      const imgX = Math.round((ev.clientX - rect.left) / rect.width * imgWidth);
+      const imgY = Math.round((ev.clientY - rect.top) / rect.height * imgHeight);
+
+      try {
+        const r = await fetch('/select_target', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ x: imgX, y: imgY })
+        });
+        const j = await r.json();
+        if (j.success) {
+          selected = j.selected;
+          selSpan.textContent = selected;
+          drawOverlays();
+        } else {
+          selected = null;
+          selSpan.textContent = 'None';
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    // clear selection
+    clearBtn.addEventListener('click', async () => {
+      await fetch('/select_target', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ track_id: null })
+      });
+      selected = null;
+      selSpan.textContent = 'None';
+      drawOverlays();
+    });
+
+    // start polling
+    updateDetections();
+  </script>
+</body>
+</html>
