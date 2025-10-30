@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """
-uart6.py
 Flask + Person detection + follow-controller (pymavlink) over UART.
 
 - Detects people using MobileNet-SSD (Caffe model).
